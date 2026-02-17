@@ -1,6 +1,6 @@
 # Asagumo
 
-# Setup
+## Setup
 
 - Copy `.env_template` to `.env`
 - Fill in the values
