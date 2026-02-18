@@ -60,9 +60,9 @@ parentloop:
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if err := cleanupOldRoles(s); err != nil {
-		log.Printf("Failed to cleanup roles: %v", err)
-	}
+	// if err := cleanupOldRoles(s); err != nil {
+	// 	log.Printf("Failed to cleanup roles: %v", err)
+	// }
 }
 
 func retryOnRateLimit(f func() error) error {
