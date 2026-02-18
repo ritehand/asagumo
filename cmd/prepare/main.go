@@ -1,18 +1,21 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	bot "github.com/1l0/asagumo"
 
 	"github.com/bwmarrin/discordgo"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func init() {
@@ -20,6 +23,12 @@ func init() {
 }
 
 func main() {
+	db, err := initDB()
+	if err != nil {
+		log.Fatalln("Failed to initialize database:", err)
+	}
+	defer db.Close()
+
 	s, err := discordgo.New("Bot " + bot.Token)
 	if err != nil {
 		log.Fatalln(err)
@@ -34,26 +43,22 @@ func main() {
 
 	log.Println("Bot session opened.")
 
-	// 1. Cleanup old roles
-	// if err := cleanupOldRoles(s); err != nil {
-	// 	log.Printf("Failed to cleanup roles: %v", err)
-	// }
+	// 1. Setup Channels
+	if err := createChannels(s, db); err != nil {
+		log.Printf("Error during channel/role setup: %v", err)
+	}
 
-	// 2. Setup Roles Phase (Prefectures and District Numbers)
+	// 2. Setup Roles (rate limit on Discord is low for creating roles)
 	if err := setupRoles(s); err != nil {
 		log.Printf("Failed to setup roles: %v", err)
 	}
 
-	// 3. Channel Creation Phase (Scraping)
-	// if err := createChannels(s); err != nil {
-	// 	log.Printf("Error during channel/role setup: %v", err)
-	// }
-
-	log.Println("Initial setup finished. Bot is running.")
-	select {}
+	// 3. Check Remaining Roles
+	if err := checkRoles(s); err != nil {
+		log.Printf("Failed to check roles: %v", err)
+	}
 }
 
-// Region Colors
 var prefectureColors = map[string]int{
 	"北海道": 0x1f77b4,
 	"青森県": 0xff7f0e, "岩手県": 0xff7f0e, "宮城県": 0xff7f0e, "秋田県": 0xff7f0e, "山形県": 0xff7f0e, "福島県": 0xff7f0e,
@@ -68,43 +73,7 @@ var prefectureColors = map[string]int{
 	"福岡県": 0xff9896, "佐賀県": 0xff9896, "長崎県": 0xff9896, "熊本県": 0xff9896, "大分県": 0xff9896, "宮崎県": 0xff9896, "鹿児島県": 0xff9896, "沖縄県": 0xff9896,
 }
 
-func cleanupOldRoles(s *discordgo.Session) error {
-	log.Println("Scanning for old roles to cleanup...")
-	var roles []*discordgo.Role
-	err := retryOnRateLimit(func() error {
-		var err error
-		roles, err = s.GuildRoles(bot.GuildID)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	log.Printf("Found %d roles in guild.", len(roles))
-
-	districtNumOnlyRe := regexp.MustCompile(`^[0-9]+区$`)
-
-	count := 0
-	deleted := 0
-	for _, r := range roles {
-		if strings.HasSuffix(r.Name, "区") && !districtNumOnlyRe.MatchString(r.Name) {
-			log.Printf("Deleting old role: %s", r.Name)
-			err := retryOnRateLimit(func() error {
-				return s.GuildRoleDelete(bot.GuildID, r.ID)
-			})
-			if err != nil {
-				log.Printf("Failed to delete role %s: %v", r.Name, err)
-			} else {
-				deleted++
-			}
-			count++
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-	log.Printf("Attempted to delete %d roles. Successfully deleted %d roles.", count, deleted)
-	return nil
-}
-
-func createChannels(s *discordgo.Session) error {
+func createChannels(s *discordgo.Session, db *sql.DB) error {
 	log.Println("Starting Channel Creation phase...")
 	var channels []*discordgo.Channel
 	err := retryOnRateLimit(func() error {
@@ -117,7 +86,28 @@ func createChannels(s *discordgo.Session) error {
 	}
 	existingChannels := make(map[string]*discordgo.Channel)
 	for _, c := range channels {
-		existingChannels[c.Name] = c
+		switch c.Type {
+		case discordgo.ChannelTypeGuildCategory:
+			existingChannels["cat_"+c.Name] = c
+		case discordgo.ChannelTypeGuildVoice:
+			existingChannels["voice_"+c.Name] = c
+		case discordgo.ChannelTypeGuildStageVoice:
+			existingChannels["stage_"+c.Name] = c
+		case discordgo.ChannelTypeGuildText:
+			existingChannels["text_"+c.Name] = c
+		case discordgo.ChannelTypeGuildForum:
+			existingChannels["forum_"+c.Name] = c
+		case discordgo.ChannelTypeGuildMedia:
+			existingChannels["media_"+c.Name] = c
+		case discordgo.ChannelTypeGuildDirectory:
+			existingChannels["directory_"+c.Name] = c
+		case discordgo.ChannelTypeGuildPublicThread:
+			existingChannels["public_thread_"+c.Name] = c
+		case discordgo.ChannelTypeGuildPrivateThread:
+			existingChannels["private_thread_"+c.Name] = c
+		default:
+			existingChannels["other_"+c.Name] = c
+		}
 	}
 
 	client := &http.Client{
@@ -125,83 +115,145 @@ func createChannels(s *discordgo.Session) error {
 	}
 
 	for i := 1; i <= 47; i++ {
-		url := fmt.Sprintf("https://go2senkyo.com/shugiin/28030/prefecture/%d", i)
+		var prefName string
+		var districtCount int
 
-		resp, err := client.Get(url)
-		if err != nil {
-			log.Printf("Failed to fetch %s: %v", url, err)
+		err := db.QueryRow("SELECT name, district_count FROM prefectures WHERE id = ?", i).Scan(&prefName, &districtCount)
+		if err == nil {
+			log.Printf("Using cached data for prefecture ID %d: %s (%d districts)", i, prefName, districtCount)
+		} else if err == sql.ErrNoRows {
+			prefName, districtCount, err = fetch(client, i)
+			if err != nil {
+				log.Printf("Failed to fetch data for prefecture ID %d: %v", i, err)
+				continue
+			}
+			_, err = db.Exec("INSERT INTO prefectures (id, name, district_count) VALUES (?, ?, ?)", i, prefName, districtCount)
+			if err != nil {
+				log.Printf("Failed to cache data for %s: %v", prefName, err)
+			}
+		} else {
+			log.Printf("Database error for ID %d: %v", i, err)
 			continue
 		}
-		defer resp.Body.Close()
 
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("Failed to read body %s: %v", url, err)
-			continue
-		}
-		body := string(bodyBytes)
-
-		prefNameRe := regexp.MustCompile(`＜(.*?)＞`)
-		matches := prefNameRe.FindStringSubmatch(body)
-		if len(matches) < 2 {
-			log.Printf("Failed to find prefecture name for ID %d", i)
-			continue
-		}
-		prefName := matches[1]
-
-		fmt.Printf("Processing %s...\n", prefName)
+		fmt.Printf("Processing %s (%d districts)...\n", prefName, districtCount)
 
 		var cat *discordgo.Channel
-		if c, ok := existingChannels[prefName]; ok && c.Type == discordgo.ChannelTypeGuildCategory {
-			cat = c
-		} else {
-			log.Printf("  Creating category %s...", prefName)
-			err := retryOnRateLimit(func() error {
-				var err error
-				cat, err = s.GuildChannelCreate(bot.GuildID, prefName, discordgo.ChannelTypeGuildCategory)
+
+		// Delete existing category with same name if it exists
+		if c, ok := existingChannels["cat_"+prefName]; ok && c.Type == discordgo.ChannelTypeGuildCategory {
+			log.Printf("  Skipping existing category %s...", prefName)
+			goto skipcategory
+
+		}
+
+		log.Printf("  Creating category %s...", prefName)
+		err = retryOnRateLimit(func() error {
+			var err error
+			cat, err = s.GuildChannelCreate(bot.GuildID, prefName, discordgo.ChannelTypeGuildCategory)
+			return err
+		})
+		if err != nil {
+			log.Printf("Failed to create category %s: %v", prefName, err)
+		}
+	skipcategory:
+
+		// Delete existing text channel with same name if it exists
+		if c, ok := existingChannels[prefName]; ok && c.Type == discordgo.ChannelTypeGuildText {
+			log.Printf("  Skipping existing channel %s...", prefName)
+			goto skiptextchannel
+		}
+
+		log.Printf("  Creating channel %s...", prefName)
+		err = retryOnRateLimit(func() error {
+			_, err = s.GuildChannelCreateComplex(bot.GuildID, discordgo.GuildChannelCreateData{
+				Name:     prefName,
+				Type:     discordgo.ChannelTypeGuildText,
+				ParentID: cat.ID,
+			})
+			return err
+		})
+		if err != nil {
+			log.Printf("Failed to create channel %s: %v", prefName, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	skiptextchannel:
+
+		for j := 1; j <= districtCount; j++ {
+			distName := fmt.Sprintf("%s%d区", prefName, j)
+
+			// Delete existing channel with same name if it exists
+			// Note: We scan all channels because it might be under a different category
+			if c, ok := existingChannels[distName]; ok && c.Type == discordgo.ChannelTypeGuildText {
+				log.Printf("  Skipping existing channel %s...", distName)
+				continue
+			}
+
+			log.Printf("  Creating channel %s...", distName)
+			err = retryOnRateLimit(func() error {
+				_, err = s.GuildChannelCreateComplex(bot.GuildID, discordgo.GuildChannelCreateData{
+					Name:     distName,
+					Type:     discordgo.ChannelTypeGuildText,
+					ParentID: cat.ID,
+				})
 				return err
 			})
 			if err != nil {
-				log.Printf("Failed to create category %s: %v", prefName, err)
-				continue
+				log.Printf("Failed to create channel %s: %v", distName, err)
 			}
-			existingChannels[prefName] = cat
+			time.Sleep(100 * time.Millisecond)
 		}
 
-		districtRe := regexp.MustCompile(`>([^<]+?([0-9]+区))<`)
-		districtMatches := districtRe.FindAllStringSubmatch(body, -1)
-
-		seen := make(map[string]bool)
-		for _, m := range districtMatches {
-			distName := m[1]
-			if seen[distName] {
-				continue
-			}
-			seen[distName] = true
-
-			if _, ok := existingChannels[distName]; !ok {
-				log.Printf("  Creating channel %s...", distName)
-				err := retryOnRateLimit(func() error {
-					var err error
-					_, err = s.GuildChannelCreateComplex(bot.GuildID, discordgo.GuildChannelCreateData{
-						Name:     distName,
-						Type:     discordgo.ChannelTypeGuildText,
-						ParentID: cat.ID,
-					})
-					return err
-				})
-				if err != nil {
-					log.Printf("Failed to create channel %s: %v", distName, err)
-				} else {
-					// We don't need to update existingChannels here as we don't use it again in this loop
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
+		// Delete existing voice channel with same name if it exists
+		if c, ok := existingChannels["voice_"+prefName]; ok && c.Type == discordgo.ChannelTypeGuildVoice {
+			log.Printf("  Skipping existing voice channel %s...", prefName)
+			goto skipvoicechannel
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		log.Printf("  Creating channel %s...", prefName)
+		err = retryOnRateLimit(func() error {
+			_, err = s.GuildChannelCreateComplex(bot.GuildID, discordgo.GuildChannelCreateData{
+				Name:     prefName,
+				Type:     discordgo.ChannelTypeGuildVoice,
+				ParentID: cat.ID,
+			})
+			return err
+		})
+		if err != nil {
+			log.Printf("Failed to create channel %s: %v", prefName, err)
+		}
+	skipvoicechannel:
+
+		time.Sleep(200 * time.Millisecond)
 	}
 
+	return nil
+}
+
+func checkRoles(s *discordgo.Session) error {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.Println("Checking roles...")
+	var roles []*discordgo.Role
+	err := retryOnRateLimit(func() error {
+		var err error
+		roles, err = s.GuildRoles(bot.GuildID)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	existingRoles := make(map[string]*discordgo.Role)
+	for _, r := range roles {
+		existingRoles[r.Name] = r
+	}
+	log.Printf("Current role count: %d", len(roles))
+
+	for pref, color := range prefectureColors {
+		if _, ok := existingRoles[pref]; ok {
+			continue
+		}
+		log.Printf("%s: %v", pref, color)
+	}
 	return nil
 }
 
@@ -315,4 +367,72 @@ func retryOnRateLimit(f func() error) error {
 		time.Sleep(waitSec + 500*time.Millisecond) // Buffer
 		log.Printf("  Resuming...")
 	}
+}
+
+func initDB() (*sql.DB, error) {
+	dbPath := filepath.Join("testdata", "spec.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	schema := `
+	CREATE TABLE IF NOT EXISTS prefectures (
+		id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		district_count INTEGER NOT NULL
+	);`
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func fetch(client *http.Client, i int) (string, int, error) {
+	url := fmt.Sprintf("https://go2senkyo.com/shugiin/28030/prefecture/%d", i)
+	log.Printf("Fetching %s...", url)
+
+	resp, err := client.Get(url)
+	if err != nil {
+		log.Printf("Failed to fetch %s: %v", url, err)
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read body %s: %v", url, err)
+		return "", 0, err
+	}
+	body := string(bodyBytes)
+
+	prefNameRe := regexp.MustCompile(`＜(.*?)＞`)
+	matches := prefNameRe.FindStringSubmatch(body)
+	if len(matches) < 2 {
+		log.Printf("Failed to find prefecture name for ID %d", i)
+		return "", 0, fmt.Errorf("failed to find prefecture name for ID %d", i)
+	}
+	prefName := matches[1]
+
+	districtRe := regexp.MustCompile(`>([^<]+?([0-9]+区))<`)
+	districtMatches := districtRe.FindAllStringSubmatch(body, -1)
+
+	seen := make(map[string]bool)
+	districts := []string{}
+	for _, m := range districtMatches {
+		distName := m[1]
+		if !seen[distName] {
+			seen[distName] = true
+			districts = append(districts, distName)
+		}
+	}
+	districtCount := len(districts)
+
+	return prefName, districtCount, nil
 }
