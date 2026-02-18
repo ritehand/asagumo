@@ -13,7 +13,6 @@ import (
 	bot "github.com/1l0/asagumo"
 
 	"github.com/bwmarrin/discordgo"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func init() {

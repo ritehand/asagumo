@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func InitDB() (*sql.DB, error) {
