@@ -6,8 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -23,7 +21,7 @@ func init() {
 }
 
 func main() {
-	db, err := initDB()
+	db, err := bot.InitDB()
 	if err != nil {
 		log.Fatalln("Failed to initialize database:", err)
 	}
@@ -367,31 +365,6 @@ func retryOnRateLimit(f func() error) error {
 		time.Sleep(waitSec + 500*time.Millisecond) // Buffer
 		log.Printf("  Resuming...")
 	}
-}
-
-func initDB() (*sql.DB, error) {
-	dbPath := filepath.Join("testdata", "spec.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		return nil, err
-	}
-
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		return nil, err
-	}
-
-	schema := `
-	CREATE TABLE IF NOT EXISTS prefectures (
-		id INTEGER PRIMARY KEY,
-		name TEXT NOT NULL,
-		district_count INTEGER NOT NULL
-	);`
-	if _, err := db.Exec(schema); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	return db, nil
 }
 
 func fetch(client *http.Client, i int) (string, int, error) {

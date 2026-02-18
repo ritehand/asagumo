@@ -3,9 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
-	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	bot "github.com/1l0/asagumo"
@@ -59,10 +57,6 @@ parentloop:
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-
-	// if err := cleanupOldRoles(s); err != nil {
-	// 	log.Printf("Failed to cleanup roles: %v", err)
-	// }
 }
 
 func retryOnRateLimit(f func() error) error {
@@ -95,40 +89,4 @@ func retryOnRateLimit(f func() error) error {
 
 		time.Sleep(waitSec + 500*time.Millisecond)
 	}
-}
-
-func cleanupOldRoles(s *discordgo.Session) error {
-	log.Println("Scanning for old roles to cleanup...")
-	var roles []*discordgo.Role
-	err := retryOnRateLimit(func() error {
-		var err error
-		roles, err = s.GuildRoles(bot.GuildID)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	log.Printf("Found %d roles in guild.", len(roles))
-
-	districtNumOnlyRe := regexp.MustCompile(`^[0-9]+区$`)
-
-	count := 0
-	deleted := 0
-	for _, r := range roles {
-		if strings.HasSuffix(r.Name, "区") && !districtNumOnlyRe.MatchString(r.Name) {
-			log.Printf("Deleting old role: %s", r.Name)
-			err := retryOnRateLimit(func() error {
-				return s.GuildRoleDelete(bot.GuildID, r.ID)
-			})
-			if err != nil {
-				log.Printf("Failed to delete role %s: %v", r.Name, err)
-			} else {
-				deleted++
-			}
-			count++
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-	log.Printf("Attempted to delete %d roles. Successfully deleted %d roles.", count, deleted)
-	return nil
 }
