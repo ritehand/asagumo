@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 	"regexp"
-	"strconv"
-	"strings"
 
 	bot "github.com/1l0/asagumo"
 	"github.com/bwmarrin/discordgo"
@@ -47,8 +45,11 @@ func main() {
 	}
 
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.Type == discordgo.InteractionMessageComponent {
-			handleDistrictButton(s, i, db)
+		switch i.Type {
+		case discordgo.InteractionApplicationCommand:
+			if i.ApplicationCommandData().Name == "senkyoku" {
+				handleSenkyokuCommand(s, i, db)
+			}
 		}
 	})
 
@@ -57,83 +58,47 @@ func main() {
 	}
 	defer s.Close()
 
-	log.Println("Bot is running. Setting up UI...")
-	if err := setupUI(s); err != nil {
-		log.Printf("Failed to setup UI: %v", err)
+	// Register slash commands
+	commands := []*discordgo.ApplicationCommand{
+		{
+			Name:        "senkyoku",
+			Description: "選挙区を選択してロールを付与します",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "選挙区",
+					Description: "例：1区の場合「1」または「1区」を入力",
+					Required:    true,
+				},
+			},
+		},
 	}
 
+	if _, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, bot.GuildID, commands); err != nil {
+		log.Printf("Cannot create commands: %v", err)
+	}
+
+	log.Println("Bot is running.")
 	select {}
 }
 
-func setupUI(s *discordgo.Session) error {
-	// Check if UI already exists in the channel
-	messages, err := s.ChannelMessages(TargetChannelID, 50, "", "", "")
-	if err == nil {
-		for _, m := range messages {
-			if m.Author.ID == s.State.User.ID {
-				for _, row := range m.Components {
-					if actionsRow, ok := row.(*discordgo.ActionsRow); ok {
-						for _, comp := range actionsRow.Components {
-							if btn, ok := comp.(*discordgo.Button); ok {
-								if strings.HasPrefix(btn.CustomID, "dist_") {
-									log.Println("UI already exists, skipping construction.")
-									return nil
-								}
-							}
-						}
-					}
-				}
+func handleSenkyokuCommand(s *discordgo.Session, i *discordgo.InteractionCreate, db *sql.DB) {
+	options := i.ApplicationCommandData().Options
+	for _, opt := range options {
+		if opt.Name == "選挙区" {
+			input := opt.StringValue()
+			targetDistNum, ok := bot.NormalizeNumber(input)
+			if !ok {
+				sendEphemeral(s, i, "有効な数字が見つかりませんでした。「1」「1区」「一区」のように入力してください。")
+				return
 			}
+			handleDistrictSelection(s, i, db, targetDistNum)
+			return
 		}
 	}
-
-	// Discord allows max 5 rows of 5 buttons per message.
-	// Total 30 buttons needed -> 25 in first message, 5 in second message.
-
-	createMessage := func(start, end int) *discordgo.MessageSend {
-		var rows []discordgo.MessageComponent
-		var currentRow []discordgo.MessageComponent
-
-		for i := start; i <= end; i++ {
-			btn := discordgo.Button{
-				Label:    fmt.Sprintf("%d区", i),
-				Style:    discordgo.PrimaryButton,
-				CustomID: fmt.Sprintf("dist_%d", i),
-			}
-			currentRow = append(currentRow, btn)
-
-			if len(currentRow) == 5 {
-				rows = append(rows, discordgo.ActionsRow{Components: currentRow})
-				currentRow = nil
-			}
-		}
-		if len(currentRow) > 0 {
-			rows = append(rows, discordgo.ActionsRow{Components: currentRow})
-		}
-
-		return &discordgo.MessageSend{
-			Content:    fmt.Sprintf("選挙区（%d区〜%d区）を選択してください：", start, end),
-			Components: rows,
-		}
-	}
-
-	// For simplicity, we just send new messages.
-	// In a real app, you might want to edit existing ones if found.
-	_, err = s.ChannelMessageSendComplex(TargetChannelID, createMessage(1, 25))
-	if err != nil {
-		return err
-	}
-	_, err = s.ChannelMessageSendComplex(TargetChannelID, createMessage(26, 30))
-	return err
 }
 
-func handleDistrictButton(s *discordgo.Session, i *discordgo.InteractionCreate, db *sql.DB) {
-	customID := i.MessageComponentData().CustomID
-	if !strings.HasPrefix(customID, "dist_") {
-		return
-	}
-
-	targetDistNum, _ := strconv.Atoi(strings.TrimPrefix(customID, "dist_"))
+func handleDistrictSelection(s *discordgo.Session, i *discordgo.InteractionCreate, db *sql.DB, targetDistNum int) {
 	userID := i.Member.User.ID
 
 	// Get guild roles to map IDs to names
