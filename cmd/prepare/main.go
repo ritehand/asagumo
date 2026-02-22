@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	bot "github.com/1l0/asagumo"
+	bot "github.com/ritehand/asagumo"
 
 	"github.com/bwmarrin/discordgo"
 )

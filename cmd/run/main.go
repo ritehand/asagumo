@@ -6,8 +6,8 @@ import (
 	"log"
 	"regexp"
 
-	bot "github.com/1l0/asagumo"
 	"github.com/bwmarrin/discordgo"
+	bot "github.com/ritehand/asagumo"
 )
 
 const (
