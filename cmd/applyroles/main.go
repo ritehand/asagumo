@@ -11,10 +11,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-func init() {
-	log.SetFlags(0)
-}
-
 func main() {
 	db, err := bot.InitDB()
 	if err != nil {

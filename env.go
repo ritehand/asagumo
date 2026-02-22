@@ -10,7 +10,6 @@ var (
 	PublicKey string
 	GuildID   string
 	Token     string
-	BotName   string
 )
 
 func init() {
@@ -18,8 +17,7 @@ func init() {
 	PublicKey = os.Getenv("ASAGUMO_PUBLIC_KEY")
 	GuildID = os.Getenv("ASAGUMO_GUILD_ID")
 	Token = os.Getenv("ASAGUMO_TOKEN")
-	BotName = os.Getenv("ASAGUMO_BOT_NAME")
-	if AppID == "" || PublicKey == "" || GuildID == "" || Token == "" || BotName == "" {
+	if AppID == "" || PublicKey == "" || GuildID == "" || Token == "" {
 		log.Fatalln("Missing environment variables")
 	}
 }

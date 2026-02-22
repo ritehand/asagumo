@@ -2,19 +2,33 @@ package asagumo
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 func InitDB() (*sql.DB, error) {
-	dbPath := filepath.Join("testdata", "spec.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		return nil, err
-	}
+	var db *sql.DB
+	var err error
+	if os.Getenv("KOYEB") != "" {
+		koyebPostgres := os.Getenv("KOYEB_POSTGRES")
+		if koyebPostgres == "" {
+			return nil, errors.New("KOYEB_POSTGRES is not set")
+		}
+		db, err = sql.Open("postgres", koyebPostgres)
 
-	db, err := sql.Open("sqlite3", dbPath)
+	} else {
+		dbPath := filepath.Join("testdata", "spec.db")
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+			return nil, err
+		}
+
+		db, err = sql.Open("sqlite3", dbPath)
+
+	}
 	if err != nil {
 		return nil, err
 	}

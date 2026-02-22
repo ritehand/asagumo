@@ -8,7 +8,6 @@ import (
 
 	bot "github.com/1l0/asagumo"
 	"github.com/bwmarrin/discordgo"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -27,10 +26,6 @@ var (
 		"熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
 	}
 )
-
-func init() {
-	log.SetFlags(0)
-}
 
 func main() {
 	db, err := bot.InitDB()
@@ -88,7 +83,7 @@ func handleSenkyokuCommand(s *discordgo.Session, i *discordgo.InteractionCreate,
 		if opt.Name == "選挙区" {
 			input := opt.StringValue()
 			targetDistNum, ok := bot.NormalizeNumber(input)
-			if !ok {
+			if !ok || targetDistNum == 0 {
 				sendEphemeral(s, i, "有効な数字が見つかりませんでした。「1」「1区」「一区」のように入力してください。")
 				return
 			}
