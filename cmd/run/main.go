@@ -8,6 +8,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	bot "github.com/ritehand/asagumo"
+	"github.com/ritehand/asagumo/database"
 )
 
 const (
@@ -28,7 +29,7 @@ var (
 )
 
 func main() {
-	db, err := bot.InitDB()
+	db, err := database.InitDB()
 	if err != nil {
 		log.Fatalln("Failed to initialize database:", err)
 	}

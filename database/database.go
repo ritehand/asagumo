@@ -1,4 +1,4 @@
-package asagumo
+package database
 
 import (
 	"database/sql"

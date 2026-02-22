@@ -9,10 +9,11 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	bot "github.com/ritehand/asagumo"
+	"github.com/ritehand/asagumo/database"
 )
 
 func main() {
-	db, err := bot.InitDB()
+	db, err := database.InitDB()
 	if err != nil {
 		log.Fatalln("Failed to initialize database:", err)
 	}
