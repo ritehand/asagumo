@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -43,7 +41,7 @@ func main() {
 func applyCategoryPermissions(s *discordgo.Session) error {
 	log.Println("Fetching roles...")
 	var roles []*discordgo.Role
-	err := retryOnRateLimit(func() error {
+	err := bot.RetryOnRateLimit(func() error {
 		var err error
 		roles, err = s.GuildRoles(bot.GuildID)
 		return err
@@ -63,7 +61,7 @@ func applyCategoryPermissions(s *discordgo.Session) error {
 
 	log.Println("Fetching channels...")
 	var channels []*discordgo.Channel
-	err = retryOnRateLimit(func() error {
+	err = bot.RetryOnRateLimit(func() error {
 		var err error
 		channels, err = s.GuildChannels(bot.GuildID)
 		return err
@@ -108,7 +106,7 @@ func applyCategoryPermissions(s *discordgo.Session) error {
 		log.Printf("Applying permissions to category: %s", pref)
 
 		// 1. Deny ViewChannel for @everyone
-		err = retryOnRateLimit(func() error {
+		err = bot.RetryOnRateLimit(func() error {
 			return s.ChannelPermissionSet(cat.ID, everyoneRoleID, discordgo.PermissionOverwriteTypeRole, 0, discordgo.PermissionViewChannel)
 		})
 		if err != nil {
@@ -116,7 +114,7 @@ func applyCategoryPermissions(s *discordgo.Session) error {
 		}
 
 		// 2. Allow ViewChannel for prefecture role
-		err = retryOnRateLimit(func() error {
+		err = bot.RetryOnRateLimit(func() error {
 			return s.ChannelPermissionSet(cat.ID, role.ID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel, 0)
 		})
 		if err != nil {
@@ -127,38 +125,4 @@ func applyCategoryPermissions(s *discordgo.Session) error {
 	}
 
 	return nil
-}
-
-func retryOnRateLimit(f func() error) error {
-	for {
-		err := f()
-		if err == nil {
-			return nil
-		}
-
-		restErr, ok := err.(*discordgo.RESTError)
-		if !ok || restErr.Response == nil || restErr.Response.StatusCode != http.StatusTooManyRequests {
-			return err
-		}
-
-		resp := restErr.Response
-		retryAfterStr := resp.Header.Get("Retry-After")
-		resetAfterStr := resp.Header.Get("X-RateLimit-Reset-After")
-
-		retryAfter, _ := strconv.ParseFloat(retryAfterStr, 64)
-		if retryAfter == 0 {
-			retryAfter, _ = strconv.ParseFloat(resetAfterStr, 64)
-		}
-
-		if retryAfter == 0 {
-			retryAfter = 5
-		}
-
-		waitSec := time.Duration(retryAfter * float64(time.Second))
-		resetTime := time.Now().Add(waitSec)
-
-		log.Printf("!!! RATE LIMITED !!! Wait %v (Reset at %v)", waitSec, resetTime.Format("15:04:05.000"))
-
-		time.Sleep(waitSec + 500*time.Millisecond)
-	}
 }
