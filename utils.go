@@ -1,14 +1,9 @@
 package asagumo
 
 import (
-	"log"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
-
-	"github.com/bwmarrin/discordgo"
 )
 
 func NormalizeNumber(input string) (int, bool) {
@@ -59,38 +54,4 @@ func parseKanjiNumber(s string) (int, bool) {
 	}
 	res += tmp
 	return res, res > 0
-}
-
-func RetryOnRateLimit(f func() error) error {
-	for {
-		err := f()
-		if err == nil {
-			return nil
-		}
-
-		restErr, ok := err.(*discordgo.RESTError)
-		if !ok || restErr.Response == nil || restErr.Response.StatusCode != http.StatusTooManyRequests {
-			return err
-		}
-
-		resp := restErr.Response
-		retryAfterStr := resp.Header.Get("Retry-After")
-		resetAfterStr := resp.Header.Get("X-RateLimit-Reset-After")
-
-		retryAfter, _ := strconv.ParseFloat(retryAfterStr, 64)
-		if retryAfter == 0 {
-			retryAfter, _ = strconv.ParseFloat(resetAfterStr, 64)
-		}
-
-		if retryAfter == 0 {
-			retryAfter = 5
-		}
-
-		waitSec := time.Duration(retryAfter * float64(time.Second))
-		resetTime := time.Now().Add(waitSec)
-
-		log.Printf("!!! RATE LIMITED !!! Wait %v (Reset at %v)", waitSec, resetTime.Format("15:04:05.000"))
-
-		time.Sleep(waitSec + 500*time.Millisecond)
-	}
 }
